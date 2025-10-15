@@ -1,0 +1,1007 @@
+================================================================================
+COURSE MATERIALS RAG SYSTEM - ARCHITECTURE & PROCESSING FLOW
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+1. System Overview
+2. Component Architecture
+3. Technology Stack
+4. Query Processing Flow (Complete Trace)
+5. Data Flow Diagram
+6. Component Details
+7. Key Features & Capabilities
+
+
+================================================================================
+1. SYSTEM OVERVIEW
+================================================================================
+
+A full-stack Retrieval-Augmented Generation (RAG) system that enables
+intelligent Q&A about course materials using semantic search and AI-powered
+responses.
+
+PURPOSE:
+- Answer questions about course content, lessons, and instructors
+- Provide context-aware responses with source citations
+- Maintain conversation history across sessions
+- Enable semantic search across multiple courses
+
+KEY CAPABILITIES:
+- Semantic document search using vector embeddings
+- Tool-based retrieval (AI decides when to search)
+- Session-based conversation tracking
+- Multi-course knowledge base management
+
+
+================================================================================
+2. COMPONENT ARCHITECTURE
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         FRONTEND LAYER                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
+│  │  index.html  │  │  script.js   │  │  style.css   │              │
+│  │   (UI/DOM)   │  │ (Logic/API)  │  │  (Styling)   │              │
+│  └──────────────┘  └──────────────┘  └──────────────┘              │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │ HTTP POST /api/query
+                             │ {query, session_id}
+                             ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                     FASTAPI BACKEND LAYER                            │
+│  ┌────────────────────────────────────────────────────────────┐    │
+│  │  app.py (REST API)                                          │    │
+│  │  ├─ POST /api/query → QueryResponse                        │    │
+│  │  ├─ GET /api/courses → CourseStats                         │    │
+│  │  └─ Static file serving (frontend)                         │    │
+│  └────────────────────────────────────────────────────────────┘    │
+│                             │                                        │
+│                             ▼                                        │
+│  ┌────────────────────────────────────────────────────────────┐    │
+│  │  rag_system.py (RAG Orchestrator)                          │    │
+│  │  ├─ Query processing coordination                          │    │
+│  │  ├─ Component integration                                  │    │
+│  │  └─ Session management                                     │    │
+│  └────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────┘
+                             │
+          ┌──────────────────┼──────────────────┐
+          ▼                  ▼                  ▼
+┌───────────────────┐ ┌───────────────┐ ┌─────────────────┐
+│  session_manager  │ │ ai_generator  │ │  tool_manager   │
+│  (Conversation    │ │ (Claude API)  │ │  (Search Tools) │
+│   History)        │ └───────────────┘ └─────────────────┘
+└───────────────────┘         │                  │
+                              └────────┬─────────┘
+                                       ▼
+                              ┌─────────────────┐
+                              │  search_tools   │
+                              │  (CourseSearch) │
+                              └─────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    DATA & PROCESSING LAYER                           │
+│  ┌────────────────────┐  ┌────────────────────┐                    │
+│  │ document_processor │  │   vector_store     │                    │
+│  │ ├─ File reading    │  │ ├─ ChromaDB        │                    │
+│  │ ├─ Metadata parse  │  │ ├─ Embeddings      │                    │
+│  │ ├─ Text chunking   │  │ ├─ Semantic search │                    │
+│  │ └─ Course objects  │  │ └─ Filtering       │                    │
+│  └────────────────────┘  └────────────────────┘                    │
+│                                   │                                  │
+│  ┌────────────────────────────────┴───────────────────────┐        │
+│  │  ChromaDB Persistent Storage (./chroma_db/)            │        │
+│  │  ├─ Collection: course_catalog (metadata)              │        │
+│  │  └─ Collection: course_content (vectorized chunks)     │        │
+│  └────────────────────────────────────────────────────────┘        │
+└─────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+3. TECHNOLOGY STACK
+================================================================================
+
+FRONTEND:
+├─ Vanilla JavaScript (ES6+)
+├─ HTML5 / CSS3
+└─ Marked.js (Markdown rendering)
+
+BACKEND:
+├─ Python 3.13
+├─ FastAPI 0.116.1 (Web framework)
+├─ Uvicorn 0.35.0 (ASGI server)
+└─ Python-dotenv (Environment management)
+
+AI & ML:
+├─ Anthropic Claude 3.5 Sonnet (AI generation)
+├─ sentence-transformers 5.0.0 (Text embeddings)
+└─ ChromaDB 1.0.15 (Vector database)
+
+INFRASTRUCTURE:
+├─ uv (Package manager)
+└─ Git (Version control)
+
+
+================================================================================
+4. QUERY PROCESSING FLOW (COMPLETE TRACE)
+================================================================================
+
+STEP 1: FRONTEND QUERY SUBMISSION
+──────────────────────────────────
+Location: frontend/script.js:45-96
+
+1.1 User Action
+    - User types query in input field
+    - Clicks send button OR presses Enter
+    → Triggers: sendMessage()
+
+1.2 Input Validation & UI Preparation
+    - Trim and validate query text
+    - Disable input/button during processing
+    - Display user message in chat
+    - Show loading animation
+
+1.3 HTTP Request
+    → POST /api/query
+    → Content-Type: application/json
+    → Body: {
+         query: "What is RAG?",
+         session_id: "abc123-def456" | null
+       }
+
+
+STEP 2: BACKEND API ENDPOINT
+─────────────────────────────
+Location: backend/app.py:56-74
+
+2.1 FastAPI Route Handler
+    @app.post("/api/query", response_model=QueryResponse)
+    → Receives QueryRequest (Pydantic model)
+
+2.2 Session Management
+    - Check if session_id exists
+    - If null: Create new session
+    - Store session_id for tracking
+
+2.3 Delegate to RAG System
+    → rag_system.query(query, session_id)
+    → Returns: (answer: str, sources: List[str])
+
+
+STEP 3: RAG SYSTEM ORCHESTRATION
+─────────────────────────────────
+Location: backend/rag_system.py:102-140
+
+3.1 Prompt Construction
+    prompt = "Answer this question about course materials: {query}"
+
+3.2 Retrieve Conversation Context
+    - Fetch previous exchanges from session_manager
+    - Format as conversation history string
+
+3.3 AI Generation with Tools
+    → ai_generator.generate_response(
+         query=prompt,
+         conversation_history=history,
+         tools=tool_definitions,  # Search tool schema
+         tool_manager=tool_manager
+       )
+
+
+STEP 4: AI RESPONSE GENERATION (INITIAL)
+─────────────────────────────────────────
+Location: backend/ai_generator.py:43-87
+
+4.1 System Prompt Preparation
+    - Base system prompt (instructions for AI)
+    - Append conversation history if exists
+    - Define search tool usage rules
+
+4.2 Claude API Call
+    → anthropic.messages.create(
+         model="claude-3-5-sonnet-20241022",
+         messages=[{role: "user", content: query}],
+         system=system_content,
+         tools=[search_tool_definition],
+         temperature=0,
+         max_tokens=800
+       )
+
+4.3 Response Analysis
+    IF stop_reason == "tool_use":
+       → Proceed to STEP 5 (Tool Execution)
+    ELSE:
+       → Return direct text response (general knowledge question)
+
+
+STEP 5: TOOL EXECUTION (IF CLAUDE DECIDES TO SEARCH)
+─────────────────────────────────────────────────────
+Location: backend/ai_generator.py:89-135
+
+5.1 Tool Use Detection
+    - Parse response.content for tool_use blocks
+    - Extract: tool_name, tool_input, tool_use_id
+
+5.2 Execute Search Tool
+    → tool_manager.execute_tool(
+         "search_course_content",
+         query="RAG",
+         course_name=None,
+         lesson_number=None
+       )
+
+
+STEP 6: VECTOR SEARCH EXECUTION
+────────────────────────────────
+Location: backend/search_tools.py:52-86 → backend/vector_store.py:61-100
+
+6.1 Search Tool Handler
+    - Receive query parameters
+    - Call vector_store.search()
+
+6.2 Course Name Resolution (if provided)
+    - Semantic search in course_catalog collection
+    - Fuzzy match course title
+    - Example: "MCP" → "MCP: Build Rich-Context AI Apps with Anthropic"
+
+6.3 Filter Construction
+    - Build ChromaDB where clause
+    - Filters: {course_title: "...", lesson_number: N}
+
+6.4 Semantic Vector Search
+    Process:
+    ┌─────────────────────────────────────────────┐
+    │ 1. Query Text → Embedding Vector            │
+    │    sentence-transformers model              │
+    │    "What is RAG?" → [0.23, -0.45, 0.12...] │
+    ├─────────────────────────────────────────────┤
+    │ 2. Compare with Stored Chunk Vectors        │
+    │    Cosine similarity calculation            │
+    │    Find top N most similar chunks           │
+    ├─────────────────────────────────────────────┤
+    │ 3. Apply Filters                            │
+    │    Course title, lesson number              │
+    ├─────────────────────────────────────────────┤
+    │ 4. Return Results                           │
+    │    Documents + Metadata + Distances         │
+    └─────────────────────────────────────────────┘
+
+    ChromaDB Query:
+    → course_content.query(
+         query_texts=["What is RAG?"],
+         n_results=5,
+         where={course_title: "..."}
+       )
+
+6.5 Result Formatting
+    Format each result as:
+    [Course Title - Lesson N]
+    Chunk content text...
+
+    Track sources: ["Course Title - Lesson N", ...]
+
+
+STEP 7: FINAL AI RESPONSE GENERATION
+─────────────────────────────────────
+Location: backend/ai_generator.py:122-135
+
+7.1 Construct Tool Result Message
+    messages.append({
+      role: "assistant",
+      content: [tool_use_block]
+    })
+    messages.append({
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "...",
+        content: formatted_search_results
+      }]
+    })
+
+7.2 Second Claude API Call
+    → anthropic.messages.create(
+         model="claude-3-5-sonnet-20241022",
+         messages=[...],  # Includes tool results
+         system=system_content,
+         temperature=0,
+         max_tokens=800
+         # NO tools parameter - final generation
+       )
+
+7.3 Extract Final Response
+    → response.content[0].text
+    Returns synthesized answer based on search results
+
+
+STEP 8: RESPONSE ASSEMBLY & RETURN
+───────────────────────────────────
+Location: backend/rag_system.py:129-140 → backend/app.py:68-72
+
+8.1 Extract Sources
+    → tool_manager.get_last_sources()
+    Returns: ["Course A - Lesson 5", "Course B - Lesson 3"]
+
+8.2 Update Session History
+    session_manager.add_exchange(
+       session_id,
+       query="What is RAG?",
+       response="RAG is..."
+    )
+
+8.3 Construct API Response
+    return QueryResponse(
+       answer="RAG (Retrieval-Augmented Generation) is...",
+       sources=["Course A - Lesson 5", "Course B - Lesson 3"],
+       session_id="abc123-def456"
+    )
+
+
+STEP 9: FRONTEND RESPONSE HANDLING
+───────────────────────────────────
+Location: frontend/script.js:76-95
+
+9.1 Parse JSON Response
+    const data = await response.json()
+    → {answer, sources, session_id}
+
+9.2 Update Session State
+    if (!currentSessionId) {
+       currentSessionId = data.session_id
+    }
+
+9.3 Display Response
+    - Remove loading animation
+    - Convert markdown to HTML (marked.parse)
+    - Render assistant message
+    - Add collapsible sources section
+    - Auto-scroll to bottom
+
+9.4 Re-enable Input
+    - Enable input field and send button
+    - Focus on input for next query
+
+
+================================================================================
+5. DATA FLOW DIAGRAM
+================================================================================
+
+┌───────────────────────────────────────────────────────────────────────┐
+│                     QUERY PROCESSING DATA FLOW                        │
+└───────────────────────────────────────────────────────────────────────┘
+
+USER INPUT
+    │
+    │ "What is RAG?"
+    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ FRONTEND (script.js)                                                │
+│                                                                     │
+│ sendMessage()                                                       │
+│  ├─ Validate input                                                 │
+│  ├─ Display user message                                           │
+│  └─ Show loading state                                             │
+└─────────────────────────────────────────────────────────────────────┘
+    │
+    │ HTTP POST
+    │ {query: "What is RAG?", session_id: "abc123"}
+    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ FASTAPI (app.py)                                                    │
+│                                                                     │
+│ @app.post("/api/query")                                            │
+│  ├─ Parse QueryRequest (Pydantic)                                  │
+│  ├─ Create/retrieve session_id                                     │
+│  └─ Delegate to RAG system                                         │
+└─────────────────────────────────────────────────────────────────────┘
+    │
+    │ rag_system.query(query, session_id)
+    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ RAG SYSTEM (rag_system.py)                                         │
+│                                                                     │
+│  ┌──────────────────┐                                              │
+│  │ Get conversation │                                              │
+│  │ history from     │                                              │
+│  │ session_manager  │                                              │
+│  └────────┬─────────┘                                              │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌──────────────────────────────────────┐                         │
+│  │ Build prompt + history context       │                         │
+│  └────────┬─────────────────────────────┘                         │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌──────────────────────────────────────┐                         │
+│  │ Send to AI Generator with tools      │                         │
+│  └────────┬─────────────────────────────┘                         │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            │ ai_generator.generate_response(
+            │   query, history, tools, tool_manager
+            │ )
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ AI GENERATOR (ai_generator.py)                                     │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Prepare system prompt + history        │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ CLAUDE API CALL #1                     │                       │
+│  │ anthropic.messages.create(             │                       │
+│  │   model="claude-3-5-sonnet",           │                       │
+│  │   messages=[{role: "user", ...}],      │                       │
+│  │   tools=[search_tool_definition]       │                       │
+│  │ )                                       │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Claude decides: Need to search?        │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ├─ No → Return direct answer                             │
+│           │                                                         │
+│           └─ Yes → Tool use block:                                 │
+│                    {                                                │
+│                      name: "search_course_content",                │
+│                      input: {                                       │
+│                        query: "RAG",                                │
+│                        course_name: null,                           │
+│                        lesson_number: null                          │
+│                      }                                              │
+│                    }                                                │
+└───────────┬─────────────────────────────────────────────────────────┘
+            │
+            │ tool_manager.execute_tool("search_course_content", ...)
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ TOOL MANAGER (search_tools.py)                                     │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Route to CourseSearchTool.execute()    │                       │
+│  └────────┬───────────────────────────────┘                       │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            │ vector_store.search(query, course_name, lesson_number)
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ VECTOR STORE (vector_store.py)                                     │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ IF course_name provided:               │                       │
+│  │   ├─ Semantic match in course_catalog  │                       │
+│  │   └─ "MCP" → full course title         │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Build ChromaDB filter                  │                       │
+│  │ where={course_title: "...",            │                       │
+│  │        lesson_number: N}               │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ CHROMADB VECTOR SEARCH                 │                       │
+│  │ ┌────────────────────────────────────┐ │                       │
+│  │ │ 1. Vectorize query with            │ │                       │
+│  │ │    sentence-transformers           │ │                       │
+│  │ │    "RAG" → [0.23, -0.45, ...]      │ │                       │
+│  │ ├────────────────────────────────────┤ │                       │
+│  │ │ 2. Cosine similarity search        │ │                       │
+│  │ │    Compare with 108k+ stored       │ │                       │
+│  │ │    chunk vectors                   │ │                       │
+│  │ ├────────────────────────────────────┤ │                       │
+│  │ │ 3. Apply filters                   │ │                       │
+│  │ ├────────────────────────────────────┤ │                       │
+│  │ │ 4. Return top 5 matches            │ │                       │
+│  │ └────────────────────────────────────┘ │                       │
+│  │                                        │                       │
+│  │ Returns:                               │                       │
+│  │  documents: [chunk1, chunk2, ...]     │                       │
+│  │  metadata: [{course_title, lesson},...]│                       │
+│  │  distances: [0.12, 0.15, ...]         │                       │
+│  └────────┬───────────────────────────────┘                       │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            │ SearchResults object
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ SEARCH TOOL (search_tools.py)                                      │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Format results:                        │                       │
+│  │                                         │                       │
+│  │ [Course Title - Lesson 5]              │                       │
+│  │ RAG is a technique that combines...    │                       │
+│  │                                         │                       │
+│  │ [Another Course - Lesson 3]            │                       │
+│  │ Retrieval-Augmented Generation uses... │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Store sources for UI:                  │                       │
+│  │ ["Course Title - Lesson 5",            │                       │
+│  │  "Another Course - Lesson 3"]          │                       │
+│  └────────┬───────────────────────────────┘                       │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            │ Formatted search results string
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ AI GENERATOR (ai_generator.py) - CONTINUED                         │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Build conversation with tool results:  │                       │
+│  │                                         │                       │
+│  │ messages = [                           │                       │
+│  │   {role: "user", content: "What..."},  │                       │
+│  │   {role: "assistant", content: [       │                       │
+│  │     {type: "tool_use", ...}            │                       │
+│  │   ]},                                   │                       │
+│  │   {role: "user", content: [            │                       │
+│  │     {type: "tool_result",              │                       │
+│  │      content: formatted_results}       │                       │
+│  │   ]}                                    │                       │
+│  │ ]                                       │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ CLAUDE API CALL #2                     │                       │
+│  │ anthropic.messages.create(             │                       │
+│  │   model="claude-3-5-sonnet",           │                       │
+│  │   messages=[...],  # with tool results │                       │
+│  │   # NO tools parameter                 │                       │
+│  │ )                                       │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Claude synthesizes final answer:       │                       │
+│  │                                         │                       │
+│  │ "RAG (Retrieval-Augmented Generation)  │                       │
+│  │  is a technique that combines          │                       │
+│  │  retrieval of relevant documents with  │                       │
+│  │  text generation. It works by..."      │                       │
+│  └────────┬───────────────────────────────┘                       │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            │ Final response text
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ RAG SYSTEM (rag_system.py) - CONTINUED                             │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Get sources from tool_manager          │                       │
+│  │ sources = ["Course A - Lesson 5", ...] │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Update session history                 │                       │
+│  │ session_manager.add_exchange(...)      │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Return (answer, sources)               │                       │
+│  └────────┬───────────────────────────────┘                       │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            │ (answer, sources) tuple
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ FASTAPI (app.py) - CONTINUED                                       │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Construct QueryResponse:               │                       │
+│  │ {                                       │                       │
+│  │   answer: "RAG is...",                 │                       │
+│  │   sources: ["Course A - Lesson 5"],    │                       │
+│  │   session_id: "abc123-def456"          │                       │
+│  │ }                                       │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Serialize to JSON                      │                       │
+│  │ Set HTTP 200 OK                        │                       │
+│  └────────┬───────────────────────────────┘                       │
+└───────────┼─────────────────────────────────────────────────────────┘
+            │
+            │ HTTP Response (JSON)
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ FRONTEND (script.js) - CONTINUED                                   │
+│                                                                     │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Parse JSON response                    │                       │
+│  │ const data = await response.json()     │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Update session state                   │                       │
+│  │ currentSessionId = data.session_id     │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Remove loading animation               │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ addMessage(data.answer, 'assistant',   │                       │
+│  │            data.sources)                │                       │
+│  │  ├─ Convert markdown → HTML            │                       │
+│  │  ├─ Create message div                 │                       │
+│  │  ├─ Add collapsible sources            │                       │
+│  │  ├─ Append to chat                     │                       │
+│  │  └─ Auto-scroll to bottom              │                       │
+│  └────────┬───────────────────────────────┘                       │
+│           │                                                         │
+│           ▼                                                         │
+│  ┌────────────────────────────────────────┐                       │
+│  │ Re-enable input field & button         │                       │
+│  │ Focus on input for next query          │                       │
+│  └────────────────────────────────────────┘                       │
+└─────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ USER SEES RESPONSE                                                  │
+│                                                                     │
+│ ┌─────────────────────────────────────────────────────────────┐   │
+│ │ Assistant:                                                   │   │
+│ │                                                              │   │
+│ │ RAG (Retrieval-Augmented Generation) is a technique that    │   │
+│ │ combines retrieval of relevant documents with text           │   │
+│ │ generation. It works by first searching a knowledge base...  │   │
+│ │                                                              │   │
+│ │ ▼ Sources                                                    │   │
+│ │   • Course A - Lesson 5                                      │   │
+│ │   • Course B - Lesson 3                                      │   │
+│ └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+6. COMPONENT DETAILS
+================================================================================
+
+6.1 FRONTEND (frontend/)
+────────────────────────
+
+index.html
+├─ Purpose: Main UI structure
+├─ Key Elements:
+│  ├─ #chatMessages: Message display area
+│  ├─ #chatInput: User query input field
+│  ├─ #sendButton: Submit query button
+│  ├─ #totalCourses: Course count display
+│  └─ #courseTitles: Available courses list
+└─ Libraries: Marked.js for markdown rendering
+
+script.js
+├─ Purpose: Frontend logic and API communication
+├─ Key Functions:
+│  ├─ sendMessage(): Handle query submission
+│  ├─ addMessage(): Display chat messages
+│  ├─ loadCourseStats(): Fetch course information
+│  └─ createNewSession(): Initialize chat session
+├─ State Management:
+│  └─ currentSessionId: Tracks user session
+└─ API Endpoints Used:
+   ├─ POST /api/query
+   └─ GET /api/courses
+
+
+6.2 BACKEND API (backend/app.py)
+─────────────────────────────────
+
+FastAPI Application
+├─ Purpose: REST API and static file serving
+├─ Middleware:
+│  ├─ CORS: Allow all origins (*)
+│  └─ TrustedHost: Accept all hosts
+├─ Endpoints:
+│  ├─ POST /api/query
+│  │  ├─ Input: QueryRequest {query, session_id}
+│  │  ├─ Output: QueryResponse {answer, sources, session_id}
+│  │  └─ Process: Delegate to RAG system
+│  └─ GET /api/courses
+│     ├─ Output: CourseStats {total_courses, course_titles}
+│     └─ Process: Get analytics from vector store
+├─ Startup Event:
+│  └─ Load documents from ../docs/ folder
+└─ Static Files:
+   └─ Serve frontend from ../frontend/
+
+
+6.3 RAG SYSTEM (backend/rag_system.py)
+───────────────────────────────────────
+
+Purpose: Central orchestrator for RAG operations
+
+Components:
+├─ document_processor: Process and chunk documents
+├─ vector_store: Vector database operations
+├─ ai_generator: Claude API interactions
+├─ session_manager: Conversation history tracking
+└─ tool_manager: Search tool coordination
+
+Key Methods:
+├─ add_course_document(file_path): Add single course
+├─ add_course_folder(folder_path): Batch load courses
+├─ query(query, session_id): Process user queries
+└─ get_course_analytics(): Retrieve statistics
+
+Query Processing Flow:
+1. Build prompt with query
+2. Retrieve conversation history
+3. Generate response with tools
+4. Extract sources from tool execution
+5. Update session history
+6. Return (answer, sources)
+
+
+6.4 DOCUMENT PROCESSOR (backend/document_processor.py)
+───────────────────────────────────────────────────────
+
+Purpose: Parse and chunk course documents
+
+Input Format:
+├─ Line 1: Course Title: [title]
+├─ Line 2: Course Link: [url]
+├─ Line 3: Course Instructor: [name]
+└─ Subsequent lines: Lesson markers and content
+   ├─ Lesson N: [title]
+   ├─ Lesson Link: [url]
+   └─ Lesson content...
+
+Processing Steps:
+1. Read file with UTF-8 encoding
+2. Extract course metadata (title, link, instructor)
+3. Parse lessons with regex: r'^Lesson\s+(\d+):\s*(.+)$'
+4. Chunk lesson content:
+   ├─ Sentence-based splitting
+   ├─ Configurable chunk_size (default: 1000 chars)
+   ├─ Configurable chunk_overlap (default: 200 chars)
+   └─ Add context prefix: "Course {title} Lesson {N} content: {chunk}"
+5. Create Course and CourseChunk objects
+
+Output:
+├─ Course object: {title, link, instructor, lessons[]}
+└─ List[CourseChunk]: {content, course_title, lesson_number, chunk_index}
+
+
+6.5 VECTOR STORE (backend/vector_store.py)
+───────────────────────────────────────────
+
+Purpose: Semantic search using ChromaDB
+
+Storage: ./chroma_db/ (persistent)
+
+Collections:
+├─ course_catalog
+│  ├─ Purpose: Course metadata for fuzzy matching
+│  ├─ Documents: Course titles
+│  ├─ Metadata: {title, instructor, course_link, lessons_json}
+│  └─ IDs: Course title (unique)
+└─ course_content
+   ├─ Purpose: Searchable course content
+   ├─ Documents: Text chunks with context
+   ├─ Metadata: {course_title, lesson_number, chunk_index}
+   └─ IDs: {course_title}_{chunk_index}
+
+Embedding Model: sentence-transformers (default model)
+
+Key Methods:
+├─ search(query, course_name, lesson_number, limit)
+│  ├─ Resolve course name (fuzzy match)
+│  ├─ Build filter (course + lesson)
+│  ├─ Vector search in course_content
+│  └─ Return SearchResults
+├─ _resolve_course_name(course_name)
+│  └─ Semantic match in course_catalog
+├─ add_course_metadata(course)
+├─ add_course_content(chunks)
+├─ get_existing_course_titles()
+└─ get_course_count()
+
+
+6.6 AI GENERATOR (backend/ai_generator.py)
+───────────────────────────────────────────
+
+Purpose: Claude API interaction and response generation
+
+Configuration:
+├─ Model: claude-3-5-sonnet-20241022
+├─ Temperature: 0 (deterministic)
+└─ Max tokens: 800
+
+System Prompt Strategy:
+├─ Search tool usage rules
+│  ├─ One search per query maximum
+│  ├─ Use only for course-specific questions
+│  └─ Synthesize search results
+├─ Response protocol
+│  ├─ Brief and concise
+│  ├─ Educational value
+│  └─ No meta-commentary
+└─ Conversation history integration
+
+Tool Execution Flow:
+1. Initial API call with tools parameter
+2. Check stop_reason == "tool_use"
+3. Extract tool_use blocks
+4. Execute tools via tool_manager
+5. Build conversation with tool results
+6. Final API call without tools
+7. Return synthesized response
+
+
+6.7 SEARCH TOOLS (backend/search_tools.py)
+───────────────────────────────────────────
+
+Purpose: Tool abstraction for AI agent
+
+CourseSearchTool:
+├─ Tool Definition (Anthropic format):
+│  ├─ name: "search_course_content"
+│  ├─ description: "Search course materials..."
+│  └─ input_schema:
+│     ├─ query (required): Content search string
+│     ├─ course_name (optional): Partial course name
+│     └─ lesson_number (optional): Specific lesson
+├─ execute(query, course_name, lesson_number):
+│  ├─ Call vector_store.search()
+│  ├─ Format results with headers
+│  └─ Track sources for UI
+└─ _format_results(results):
+   ├─ Add course/lesson headers
+   ├─ Store sources list
+   └─ Return formatted string
+
+ToolManager:
+├─ register_tool(tool): Register tool instances
+├─ get_tool_definitions(): Schema for Claude API
+├─ execute_tool(name, **kwargs): Route to tool.execute()
+├─ get_last_sources(): Extract sources for UI
+└─ reset_sources(): Clear after retrieval
+
+
+6.8 SESSION MANAGER (backend/session_manager.py)
+─────────────────────────────────────────────────
+
+Purpose: Maintain conversation context per user
+
+Storage: In-memory dictionary (resets on server restart)
+
+Session Structure:
+{
+  session_id: {
+    exchanges: [
+      {query: "...", response: "..."},
+      {query: "...", response: "..."}
+    ]
+  }
+}
+
+Key Methods:
+├─ create_session() → session_id (UUID)
+├─ add_exchange(session_id, query, response)
+├─ get_conversation_history(session_id) → formatted string
+└─ Format example:
+   "User: What is RAG?
+    Assistant: RAG is a technique...
+    User: Tell me more
+    Assistant: RAG combines..."
+
+
+6.9 DATA MODELS (backend/models.py)
+────────────────────────────────────
+
+Course:
+├─ title: str
+├─ course_link: Optional[str]
+├─ instructor: Optional[str]
+└─ lessons: List[Lesson]
+
+Lesson:
+├─ lesson_number: int
+├─ title: str
+└─ lesson_link: Optional[str]
+
+CourseChunk:
+├─ content: str (text with context prefix)
+├─ course_title: str
+├─ lesson_number: Optional[int]
+└─ chunk_index: int
+
+
+6.10 CONFIGURATION (backend/config.py)
+───────────────────────────────────────
+
+Configuration Class:
+├─ ANTHROPIC_API_KEY: From environment
+├─ ANTHROPIC_MODEL: "claude-3-5-sonnet-20241022"
+├─ EMBEDDING_MODEL: "all-MiniLM-L6-v2" (sentence-transformers)
+├─ CHROMA_PATH: "./chroma_db"
+├─ CHUNK_SIZE: 1000 characters
+├─ CHUNK_OVERLAP: 200 characters
+├─ MAX_RESULTS: 5 (vector search limit)
+└─ MAX_HISTORY: 10 exchanges (session limit)
+
+
+================================================================================
+7. KEY FEATURES & CAPABILITIES
+================================================================================
+
+7.1 SEMANTIC SEARCH
+───────────────────
+- Vector embeddings for course content
+- Fuzzy course name matching
+- Lesson-level filtering
+- Context-aware chunking
+
+7.2 TOOL-BASED RETRIEVAL
+─────────────────────────
+- AI decides when to search (not forced)
+- One search per query maximum
+- General knowledge vs. course-specific detection
+- Tool use logging for debugging
+
+7.3 CONVERSATION MANAGEMENT
+───────────────────────────
+- Session-based history tracking
+- Context preservation across queries
+- Configurable history length
+- Auto-session creation
+
+7.4 SOURCE ATTRIBUTION
+──────────────────────
+- Track retrieved chunks
+- Display course + lesson citations
+- Collapsible sources UI
+- Transparent AI reasoning
+
+7.5 DOCUMENT PROCESSING
+───────────────────────
+- Structured format parsing
+- Metadata extraction (title, instructor, links)
+- Lesson-aware chunking
+- Incremental loading (skip duplicates)
+
+7.6 PERFORMANCE OPTIMIZATIONS
+──────────────────────────────
+- Persistent vector storage (ChromaDB)
+- Pre-built system prompts
+- Efficient chunking algorithm
+- Minimal API calls (1-2 per query)
+
+7.7 ERROR HANDLING
+──────────────────
+- Frontend: Display error messages
+- Backend: HTTP 500 with detail
+- Vector store: Return empty results with error message
+- Graceful fallbacks throughout
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+File: arch_summary_claude.txt
+Generated: 2025
+System: Course Materials RAG Chatbot
+Purpose: Architecture documentation for query processing flow
